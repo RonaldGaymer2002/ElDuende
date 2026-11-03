@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io';
+import 'package:http/http.dart' as http;
 
 class LiveTelemetryData {
   final double temperatureC;
@@ -56,16 +56,14 @@ class RealTelemetryService {
   // URL base configurable del servidor desplegado en Render
   static String renderUrl = 'https://simar-backend.onrender.com';
 
-  final HttpClient _client = HttpClient()
-    ..connectionTimeout = const Duration(seconds: 8);
-
   Future<String> _getJson(String url) async {
-    final request = await _client.getUrl(Uri.parse(url));
-    final response = await request.close();
+    final response = await http.get(Uri.parse(url)).timeout(
+          const Duration(seconds: 8),
+        );
     if (response.statusCode != 200) {
-      throw HttpException('HTTP Error ${response.statusCode}');
+      throw Exception('HTTP Error ${response.statusCode}');
     }
-    return await response.transform(utf8.decoder).join();
+    return response.body;
   }
 
   /// Consulta simultánea de todas las APIs reales para Santa Cruz y la cuenca del Piraí
