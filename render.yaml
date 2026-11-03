@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: simar-backend
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: SERPAPI_KEY
+        sync: false

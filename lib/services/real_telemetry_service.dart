@@ -53,6 +53,9 @@ class LiveTelemetryData {
 }
 
 class RealTelemetryService {
+  // URL base configurable del servidor desplegado en Render
+  static String renderUrl = 'https://simar-backend.onrender.com';
+
   final HttpClient _client = HttpClient()
     ..connectionTimeout = const Duration(seconds: 8);
 
@@ -67,6 +70,31 @@ class RealTelemetryService {
 
   /// Consulta simultánea de todas las APIs reales para Santa Cruz y la cuenca del Piraí
   Future<LiveTelemetryData> fetchAllLiveTelemetry() async {
+    // 0. Intento primario: Servidor SIMAR desplegado en Render
+    try {
+      final renderJsonStr = await _getJson('$renderUrl/api/v1/telemetry');
+      final renderResp = jsonDecode(renderJsonStr);
+      if (renderResp['success'] == true && renderResp['data'] != null) {
+        final d = renderResp['data'];
+        return LiveTelemetryData(
+          temperatureC: (d['temperatureC'] as num?)?.toDouble() ?? 29.0,
+          apparentTempC: (d['apparentTempC'] as num?)?.toDouble() ?? 31.0,
+          uvIndex: 7,
+          windSpeedKmh: (d['windSpeedKmh'] as num?)?.toInt() ?? 20,
+          windGustsKmh: (d['windGustsKmh'] as num?)?.toInt() ?? 35,
+          airQualityIndex: (d['airQualityIndex'] as num?)?.toInt() ?? 58,
+          airQualityLabel: 'Render Server',
+          samaipataRainMm: (d['samaipataRainMm'] as num?)?.toDouble() ?? 0.0,
+          angosturaRainMm: 0.0,
+          sczRainMm: (d['sczRainMm'] as num?)?.toDouble() ?? 0.0,
+          lastUpdated: DateTime.now(),
+          isLive: true,
+        );
+      }
+    } catch (_) {
+      // Si el servidor Render está en frío o sin conexión, pasamos a conexión directa
+    }
+
     double temp = 29.0;
     double apparent = 31.0;
     int wind = 20;
@@ -101,7 +129,6 @@ class RealTelemetryService {
         sczRain = (current['precipitation'] as num?)?.toDouble() ?? 0.0;
       }
 
-      // UV Index actual aproximado
       final hourly = data['hourly'];
       if (hourly != null && hourly['uv_index'] != null) {
         final List uvs = hourly['uv_index'];
@@ -129,7 +156,7 @@ class RealTelemetryService {
         } else if (aqi <= 100) {
           aqiLabel = 'Moderado';
         } else if (aqi <= 150) {
-          aqiLabel = 'Dañino grupos sensibles';
+          aqiLabel = 'Dañino sensible';
         } else {
           aqiLabel = 'Dañino por Humo';
         }
@@ -138,7 +165,6 @@ class RealTelemetryService {
 
     // 3. API Open-Meteo: Lluvias en Cabecera (Samaipata y La Angostura)
     try {
-      // Samaipata (-18.1794, -63.8756)
       final samUrl =
           'https://api.open-meteo.com/v1/forecast?latitude=-18.1794&longitude=-63.8756'
           '&current=precipitation,rain&timezone=America%2FLa_Paz';
@@ -148,7 +174,6 @@ class RealTelemetryService {
         samRain = (samData['current']['precipitation'] as num?)?.toDouble() ?? 0.0;
       }
 
-      // La Angostura (-18.0683, -63.5042)
       final angUrl =
           'https://api.open-meteo.com/v1/forecast?latitude=-18.0683&longitude=-63.5042'
           '&current=precipitation,rain&timezone=America%2FLa_Paz';

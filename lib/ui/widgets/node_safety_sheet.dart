@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import '../../core/theme/tactical_theme.dart';
 import '../../models/river_node.dart';
+import '../../services/serpapi_service.dart';
 import '../../state/simar_controller.dart';
 
-class NodeSafetySheet extends StatelessWidget {
+class NodeSafetySheet extends StatefulWidget {
   final RiverNode node;
   final SimarController controller;
   final VoidCallback onClose;
@@ -16,7 +17,51 @@ class NodeSafetySheet extends StatelessWidget {
   });
 
   @override
+  State<NodeSafetySheet> createState() => _NodeSafetySheetState();
+}
+
+class _NodeSafetySheetState extends State<NodeSafetySheet> {
+  final SerpApiService _serpApiService = SerpApiService();
+  SerpApiPlaceResult? _mapsPlace;
+  bool _isLoadingMaps = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSerpApiData();
+  }
+
+  @override
+  void didUpdateWidget(covariant NodeSafetySheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.node.id != widget.node.id) {
+      _loadSerpApiData();
+    }
+  }
+
+  Future<void> _loadSerpApiData() async {
+    setState(() => _isLoadingMaps = true);
+    try {
+      final results = await _serpApiService.searchGoogleMapsPlaces(
+        '${widget.node.name} Santa Cruz Bolivia',
+      );
+      if (mounted && results.isNotEmpty) {
+        setState(() {
+          _mapsPlace = results.first;
+          _isLoadingMaps = false;
+        });
+      } else {
+        if (mounted) setState(() => _isLoadingMaps = false);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingMaps = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final node = widget.node;
+
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
       decoration: BoxDecoration(
@@ -92,7 +137,7 @@ class NodeSafetySheet extends StatelessWidget {
               IconButton(
                 icon: const Icon(Icons.close_rounded, size: 20),
                 color: Colors.white60,
-                onPressed: onClose,
+                onPressed: widget.onClose,
               ),
             ],
           ),
@@ -174,6 +219,73 @@ class NodeSafetySheet extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
+
+          // Tarjeta de Datos Google Maps vía SerpAPI Engine
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFF131D31),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0x4438BDF8), width: 1),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.map_rounded, color: Color(0xFF38BDF8), size: 14),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'GOOGLE MAPS (SERPAPI ENGINE: GOOGLE_MAPS)',
+                      style: TextStyle(
+                        color: Color(0xFF38BDF8),
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (_isLoadingMaps)
+                      const SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF38BDF8)),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _mapsPlace?.title ?? node.name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (_mapsPlace?.address != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    _mapsPlace!.address!,
+                    style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10.5),
+                  ),
+                ],
+                if (_mapsPlace?.rating != null) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.star_rounded, color: Color(0xFFFBBF24), size: 14),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${_mapsPlace!.rating} (${_mapsPlace!.reviews ?? 0} opiniones en Google Maps)',
+                        style: const TextStyle(color: Colors.white70, fontSize: 10),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
 
           // Descripción y advertencias específicas del lugar
           Text(
@@ -290,4 +402,3 @@ class NodeSafetySheet extends StatelessWidget {
     );
   }
 }
-
