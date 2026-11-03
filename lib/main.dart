@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
 import 'core/theme/tactical_theme.dart';
 import 'state/simar_controller.dart';
 import 'ui/screens/simar_home_screen.dart';
@@ -45,7 +46,7 @@ class _SimarAppState extends State<SimarApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SIMAR - Cuenca Piraí Santa Cruz',
+      title: 'SIMAR - Santa Cruz',
       debugShowCheckedModeBanner: false,
       theme: TacticalTheme.themeData,
       home: SimarHomeScreen(controller: _controller),
