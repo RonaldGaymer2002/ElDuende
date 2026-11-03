@@ -19,6 +19,7 @@ class TacticalHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final meta = controller.activeMetadata;
+    final isLive = controller.isLiveMode;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
@@ -39,7 +40,7 @@ class TacticalHeader extends StatelessWidget {
         bottom: false,
         child: Column(
           children: [
-            // Fila 1: Logo SIMAR GovTech + Switch Modo COED + Botón Modo Dios
+            // Fila 1: Logo SIMAR + Indicador de APIs Reales + Switch Modo COED + Botón Modo Dios
             Row(
               children: [
                 // Insignia SIMAR
@@ -69,30 +70,93 @@ class TacticalHeader extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
+
+                // Badge En Vivo vs Simulación
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'CUENCA PIRAÍ • SANTA CRUZ',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.6,
-                        ),
+                      Row(
+                        children: [
+                          Container(
+                            width: 7,
+                            height: 7,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: isLive ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            isLive ? 'APIS EN VIVO (OPEN-METEO/USGS)' : 'MODO DEMO SIMULADO',
+                            style: TextStyle(
+                              color: isLive ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
                       ),
                       Text(
-                        'SEARPI • COED GOBERNACIÓN',
+                        isLive ? 'Santa Cruz • Piraí • Samaipata' : 'Escenario de Jurado Activo',
                         style: TextStyle(
-                          color: TacticalTheme.accentCyan.withOpacity(0.8),
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w600,
+                          color: Colors.white.withOpacity(0.7),
+                          fontSize: 9.0,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
                   ),
                 ),
+
+                // Botón Volver a En Vivo si está en simulación
+                if (!isLive) ...[
+                  InkWell(
+                    onTap: () => controller.enableLiveMode(),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF10B981).withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: const Color(0xFF10B981), width: 1),
+                      ),
+                      child: const Row(
+                        children: [
+                          Icon(Icons.sensors_rounded, color: Color(0xFF10B981), size: 12),
+                          SizedBox(width: 3),
+                          Text(
+                            'EN VIVO',
+                            style: TextStyle(
+                              color: Color(0xFF10B981),
+                              fontSize: 9,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                ] else ...[
+                  // Botón Refrescar APIs
+                  IconButton(
+                    tooltip: 'Actualizar Telemetría Real',
+                    icon: controller.isLoadingLive
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF38BDF8)),
+                          )
+                        : const Icon(Icons.refresh_rounded, size: 16),
+                    color: const Color(0xFF38BDF8),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    onPressed: () => controller.fetchLiveTelemetry(),
+                  ),
+                  const SizedBox(width: 8),
+                ],
 
                 // Switch Dual: Ciudadano vs Comando COED
                 InkWell(
@@ -169,16 +233,16 @@ class TacticalHeader extends StatelessWidget {
             ),
             const SizedBox(height: 8),
 
-            // Fila 2: Métricas diarias de uso recreativo y estrés climático
+            // Fila 2: Métricas en vivo (Temperatura, UV, Ráfagas, ICA)
             Row(
               children: [
-                // Estrés Térmico "La Calor"
+                // Estrés Térmico "La Calor" en tiempo real
                 _buildMetricChip(
                   icon: Icons.thermostat_rounded,
-                  iconColor: meta.temperatureC >= 35 ? const Color(0xFFF97316) : TacticalTheme.accentCyan,
-                  label: 'CALOR',
-                  value: '${meta.temperatureC.toStringAsFixed(0)}°C',
-                  sub: meta.temperatureC >= 38 ? 'Extremo' : 'Normal',
+                  iconColor: meta.temperatureC >= 33 ? const Color(0xFFF97316) : TacticalTheme.accentCyan,
+                  label: 'CALOR REAL',
+                  value: '${meta.temperatureC.toStringAsFixed(1)}°C',
+                  sub: 'Sens ${controller.liveData?.apparentTempC.toStringAsFixed(0) ?? meta.temperatureC.toStringAsFixed(0)}°',
                 ),
                 const SizedBox(width: 6),
 
@@ -189,30 +253,30 @@ class TacticalHeader extends StatelessWidget {
                       ? const Color(0xFF8B5CF6)
                       : (meta.uvIndex >= 8 ? const Color(0xFFEF4444) : const Color(0xFFFBBF24)),
                   label: 'ÍNDICE UV',
-                  value: '${meta.uvIndex}+',
-                  sub: meta.uvIndex >= 11 ? 'Peligro' : 'Mod.',
+                  value: '${meta.uvIndex}',
+                  sub: meta.uvIndex >= 8 ? 'Alto' : 'Bajo',
                 ),
                 const SizedBox(width: 6),
 
-                // Ráfagas de Viento / Surazo
+                // Ráfagas de Viento reales
                 _buildMetricChip(
                   icon: Icons.air_rounded,
-                  iconColor: meta.windSpeedKmh >= 50 ? const Color(0xFFEF4444) : Colors.white70,
-                  label: 'VIENTO',
+                  iconColor: meta.windSpeedKmh >= 40 ? const Color(0xFFEF4444) : Colors.white70,
+                  label: 'VIENTO REAL',
                   value: '${meta.windSpeedKmh}k/h',
-                  sub: meta.windDirection.split(' ').first,
+                  sub: '${controller.liveData?.windGustsKmh ?? meta.windSpeedKmh}k ráf.',
                 ),
                 const SizedBox(width: 6),
 
-                // Calidad del Aire / Humo (ICA)
+                // Calidad del Aire / Humo (ICA) en tiempo real
                 _buildMetricChip(
                   icon: Icons.cloud_outlined,
-                  iconColor: meta.airQualityIndex >= 150
+                  iconColor: meta.airQualityIndex >= 100
                       ? const Color(0xFFEF4444)
-                      : (meta.airQualityIndex >= 100 ? const Color(0xFFF59E0B) : const Color(0xFF10B981)),
+                      : (meta.airQualityIndex >= 50 ? const Color(0xFFF59E0B) : const Color(0xFF10B981)),
                   label: 'AIRE ICA',
                   value: '${meta.airQualityIndex}',
-                  sub: meta.airQualityIndex >= 150 ? 'Dañino' : 'Bueno',
+                  sub: controller.liveData?.airQualityLabel.split(' ').first ?? 'Mod.',
                 ),
 
                 const Spacer(),
@@ -314,4 +378,3 @@ class TacticalHeader extends StatelessWidget {
     );
   }
 }
-

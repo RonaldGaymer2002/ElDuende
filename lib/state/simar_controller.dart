@@ -3,8 +3,11 @@ import 'package:flutter/foundation.dart';
 import '../models/citizen_report.dart';
 import '../models/river_node.dart';
 import '../models/scenario_type.dart';
+import '../services/real_telemetry_service.dart';
 
 class SimarController extends ChangeNotifier {
+  final RealTelemetryService _telemetryService = RealTelemetryService();
+
   List<RiverNode> _nodes = RiverNode.canonicalNodes;
   GovRiskScenario _currentScenario = GovRiskScenario.swimmingDay;
   double _timeOffsetHours = 0.0;
@@ -16,6 +19,16 @@ class SimarController extends ChangeNotifier {
   bool _isCoedMode = false;
   final List<CitizenReport> _reports = List.from(CitizenReport.mockReports);
 
+  // Estado de APIs en Vivo
+  LiveTelemetryData? _liveData;
+  bool _isLiveMode = true;
+  bool _isLoadingLive = false;
+
+  SimarController() {
+    // Al inicializar el controlador, consultar inmediatamente las APIs reales
+    fetchLiveTelemetry();
+  }
+
   // Getters
   List<RiverNode> get nodes => _nodes;
   GovRiskScenario get currentScenario => _currentScenario;
@@ -26,10 +39,73 @@ class SimarController extends ChangeNotifier {
   bool get isCoedMode => _isCoedMode;
   List<CitizenReport> get reports => List.unmodifiable(_reports);
 
-  ScenarioMetadata get activeMetadata =>
-      ScenarioMetadata.allScenarios[_currentScenario]!;
+  LiveTelemetryData? get liveData => _liveData;
+  bool get isLiveMode => _isLiveMode;
+  bool get isLoadingLive => _isLoadingLive;
+
+  ScenarioMetadata get activeMetadata {
+    final meta = ScenarioMetadata.allScenarios[_currentScenario]!;
+    // Si estamos en Modo En Vivo y tenemos datos reales, fusionamos los valores reales de las APIs
+    if (_isLiveMode && _liveData != null) {
+      return ScenarioMetadata(
+        scenario: meta.scenario,
+        title: meta.title,
+        shortCode: 'EN-VIVO',
+        pushTitle: meta.pushTitle,
+        pushMessage: meta.pushMessage,
+        primaryColor: meta.primaryColor,
+        icon: meta.icon,
+        visualState: meta.visualState,
+        temperatureC: _liveData!.temperatureC,
+        uvIndex: _liveData!.uvIndex,
+        airQualityIndex: _liveData!.airQualityIndex,
+        windSpeedKmh: _liveData!.windSpeedKmh,
+        windDirection: '${_liveData!.windGustsKmh} km/h ráfagas',
+        soundAlert: meta.soundAlert,
+      );
+    }
+    return meta;
+  }
 
   FlameVisualState get visualState => activeMetadata.visualState;
+
+  /// Consulta las APIs reales en vivo (Open-Meteo, USGS, Air Quality)
+  Future<void> fetchLiveTelemetry() async {
+    _isLoadingLive = true;
+    notifyListeners();
+
+    try {
+      final realData = await _telemetryService.fetchAllLiveTelemetry();
+      _liveData = realData;
+      _isLiveMode = true;
+
+      // Evaluar si las APIs reales indican condiciones críticas en la cuenca
+      if (realData.samaipataRainMm > 5.0 && realData.sczRainMm == 0.0) {
+        // Trampa climática detectada automáticamente con datos satelitales reales
+        _currentScenario = GovRiskScenario.climateTrap;
+      } else if (realData.airQualityIndex >= 150 || realData.windSpeedKmh >= 55) {
+        // Humo / Surazo detectado
+        _currentScenario = GovRiskScenario.droughtSmokeSurazo;
+      } else if (realData.temperatureC >= 36.0) {
+        // Estrés térmico extremo
+        _currentScenario = GovRiskScenario.extremeHeat;
+      }
+
+      _recalculateTelemetry();
+    } catch (_) {
+      // Si no hay internet momentáneamente, mantenemos el fallback seguro
+      _liveData ??= LiveTelemetryData.fallback();
+    } finally {
+      _isLoadingLive = false;
+      notifyListeners();
+    }
+  }
+
+  /// Activa el modo en vivo consumiendo las APIs reales
+  void enableLiveMode() {
+    _isLiveMode = true;
+    fetchLiveTelemetry();
+  }
 
   void selectNode(RiverNode? node) {
     _selectedNode = node;
@@ -60,6 +136,7 @@ class SimarController extends ChangeNotifier {
 
   /// Dispara de inmediato uno de los 8 escenarios clave de la demo
   void triggerScenario(GovRiskScenario scenario) {
+    _isLiveMode = false; // Al usar Modo Dios, cambiamos a simulación controlada
     _currentScenario = scenario;
     _timeOffsetHours = 0.0;
     _isPushBannerVisible = true;
@@ -136,7 +213,6 @@ class SimarController extends ChangeNotifier {
     double latitude = -17.7833,
     double longitude = -63.2200,
   }) {
-    // Formato ultraligero: SIMAR#<TIPO>#LAT,LON#VICTIMAS#TIMESTAMP
     final latStr = latitude.toStringAsFixed(4);
     final lonStr = longitude.toStringAsFixed(4);
     final ts = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -153,93 +229,95 @@ class SimarController extends ChangeNotifier {
       double rain = 0.0;
       SwimmingSafetyVerdict verdict = node.safetyVerdict;
 
-      switch (_currentScenario) {
-        case GovRiskScenario.swimmingDay:
-          level = node.baselineLevelMeters;
-          speed = node.currentFlowSpeedMps;
-          rain = 0.0;
-          verdict = node.isPermanentlyForbidden
-              ? SwimmingSafetyVerdict.deadlyZoneYearRound
-              : SwimmingSafetyVerdict.safe;
-          break;
-
-        case GovRiskScenario.forbiddenZoneAlert:
-          level = node.baselineLevelMeters + 0.1;
-          speed = node.currentFlowSpeedMps;
-          verdict = node.isPermanentlyForbidden
-              ? SwimmingSafetyVerdict.deadlyZoneYearRound
-              : SwimmingSafetyVerdict.safe;
-          break;
-
-        case GovRiskScenario.climateTrap:
-          // Tormenta en Samaipata y Angostura, pero sol abajo
-          if (node.transitOrder <= 2) {
-            rain = 0.85;
-            level = node.baselineLevelMeters + 1.2;
-            speed = node.currentFlowSpeedMps + 1.2;
-            verdict = SwimmingSafetyVerdict.weatherTrap;
-          } else {
-            // Abajo aún no llega la onda pero está prohibido porque ya viene
+      // Si estamos en modo en vivo y tenemos datos reales
+      if (_isLiveMode && _liveData != null) {
+        if (node.transitOrder <= 2) {
+          rain = (_liveData!.samaipataRainMm / 20.0).clamp(0.0, 1.0);
+        } else {
+          rain = (_liveData!.sczRainMm / 20.0).clamp(0.0, 1.0);
+        }
+        level = node.baselineLevelMeters + (rain * 0.8);
+        verdict = node.isPermanentlyForbidden
+            ? SwimmingSafetyVerdict.deadlyZoneYearRound
+            : (rain > 0.4 ? SwimmingSafetyVerdict.weatherTrap : SwimmingSafetyVerdict.safe);
+      } else {
+        // Lógica de simulación de escenarios
+        switch (_currentScenario) {
+          case GovRiskScenario.swimmingDay:
+            level = node.baselineLevelMeters;
+            speed = node.currentFlowSpeedMps;
             rain = 0.0;
-            level = node.baselineLevelMeters + 0.15;
             verdict = node.isPermanentlyForbidden
                 ? SwimmingSafetyVerdict.deadlyZoneYearRound
-                : SwimmingSafetyVerdict.weatherTrap;
-          }
-          break;
+                : SwimmingSafetyVerdict.safe;
+            break;
 
-        case GovRiskScenario.redTurbion:
-          // La onda del turbión viaja en el tiempo:
-          // Orden 1 (Samaipata): pico a t=0.0h
-          // Orden 2 (Angostura): pico a t=1.0h
-          // Orden 3 (Espejillos): pico a t=2.0h
-          // Orden 4 (La Guardia): pico a t=3.2h
-          // Orden 5 (Cabañas): pico a t=4.2h
-          // Orden 6 (Puente Urubó): pico a t=5.0h
-          final nodePeakHour = (node.transitOrder - 1) * 0.95;
-          final timeDiff = (_timeOffsetHours - nodePeakHour).abs();
+          case GovRiskScenario.forbiddenZoneAlert:
+            level = node.baselineLevelMeters + 0.1;
+            speed = node.currentFlowSpeedMps;
+            verdict = node.isPermanentlyForbidden
+                ? SwimmingSafetyVerdict.deadlyZoneYearRound
+                : SwimmingSafetyVerdict.safe;
+            break;
 
-          // Campana de crecida
-          final waveEffect = (1.0 - (timeDiff / 1.6)).clamp(0.0, 1.0);
-          final turbionPeakHeight = 3.6; // metros de crecida extraordinaria
+          case GovRiskScenario.climateTrap:
+            if (node.transitOrder <= 2) {
+              rain = 0.85;
+              level = node.baselineLevelMeters + 1.2;
+              speed = node.currentFlowSpeedMps + 1.2;
+              verdict = SwimmingSafetyVerdict.weatherTrap;
+            } else {
+              rain = 0.0;
+              level = node.baselineLevelMeters + 0.15;
+              verdict = node.isPermanentlyForbidden
+                  ? SwimmingSafetyVerdict.deadlyZoneYearRound
+                  : SwimmingSafetyVerdict.weatherTrap;
+            }
+            break;
 
-          level = node.baselineLevelMeters + (waveEffect * turbionPeakHeight);
-          speed = node.currentFlowSpeedMps + (waveEffect * 3.2);
-          rain = (_timeOffsetHours < 2.0 && node.transitOrder <= 2) ? 0.95 : 0.4;
+          case GovRiskScenario.redTurbion:
+            final nodePeakHour = (node.transitOrder - 1) * 0.95;
+            final timeDiff = (_timeOffsetHours - nodePeakHour).abs();
+            final waveEffect = (1.0 - (timeDiff / 1.6)).clamp(0.0, 1.0);
+            const turbionPeakHeight = 3.6;
 
-          verdict = SwimmingSafetyVerdict.emergencyTurbion;
-          break;
+            level = node.baselineLevelMeters + (waveEffect * turbionPeakHeight);
+            speed = node.currentFlowSpeedMps + (waveEffect * 3.2);
+            rain = (_timeOffsetHours < 2.0 && node.transitOrder <= 2) ? 0.95 : 0.4;
+            verdict = SwimmingSafetyVerdict.emergencyTurbion;
+            break;
 
-        case GovRiskScenario.urbanFlood:
-          level = node.baselineLevelMeters + 0.8;
-          speed = node.currentFlowSpeedMps + 1.0;
-          rain = 0.9;
-          verdict = SwimmingSafetyVerdict.weatherTrap;
-          break;
+          case GovRiskScenario.urbanFlood:
+            level = node.baselineLevelMeters + 0.8;
+            speed = node.currentFlowSpeedMps + 1.0;
+            rain = 0.9;
+            verdict = SwimmingSafetyVerdict.weatherTrap;
+            break;
 
-        case GovRiskScenario.seismicAlert:
-          level = node.baselineLevelMeters;
-          speed = node.currentFlowSpeedMps;
-          verdict = node.isPermanentlyForbidden
-              ? SwimmingSafetyVerdict.deadlyZoneYearRound
-              : SwimmingSafetyVerdict.safe;
-          break;
+          case GovRiskScenario.seismicAlert:
+            level = node.baselineLevelMeters;
+            speed = node.currentFlowSpeedMps;
+            verdict = node.isPermanentlyForbidden
+                ? SwimmingSafetyVerdict.deadlyZoneYearRound
+                : SwimmingSafetyVerdict.safe;
+            break;
 
-        case GovRiskScenario.extremeHeat:
-          level = (node.baselineLevelMeters * 0.8).clamp(0.2, 5.0);
-          speed = node.currentFlowSpeedMps * 0.8;
-          verdict = node.isPermanentlyForbidden
-              ? SwimmingSafetyVerdict.deadlyZoneYearRound
-              : SwimmingSafetyVerdict.safe;
-          break;
+          case GovRiskScenario.extremeHeat:
+            level = (node.baselineLevelMeters * 0.8).clamp(0.2, 5.0);
+            speed = node.currentFlowSpeedMps * 0.8;
+            verdict = node.isPermanentlyForbidden
+                ? SwimmingSafetyVerdict.deadlyZoneYearRound
+                : SwimmingSafetyVerdict.safe;
+            break;
 
-        case GovRiskScenario.droughtSmokeSurazo:
-          level = (node.baselineLevelMeters * 0.65).clamp(0.18, 5.0);
-          speed = node.currentFlowSpeedMps * 0.9;
-          verdict = node.isPermanentlyForbidden
-              ? SwimmingSafetyVerdict.deadlyZoneYearRound
-              : SwimmingSafetyVerdict.safe;
-          break;
+          case GovRiskScenario.droughtSmokeSurazo:
+            level = (node.baselineLevelMeters * 0.65).clamp(0.18, 5.0);
+            speed = node.currentFlowSpeedMps * 0.9;
+            verdict = node.isPermanentlyForbidden
+                ? SwimmingSafetyVerdict.deadlyZoneYearRound
+                : SwimmingSafetyVerdict.safe;
+            break;
+        }
       }
 
       updated.add(node.copyWith(
@@ -252,7 +330,6 @@ class SimarController extends ChangeNotifier {
 
     _nodes = updated;
 
-    // Actualiza el nodo seleccionado en memoria si existe
     if (_selectedNode != null) {
       _selectedNode = _nodes.firstWhere(
         (n) => n.id == _selectedNode!.id,
@@ -267,4 +344,3 @@ class SimarController extends ChangeNotifier {
     super.dispose();
   }
 }
-
